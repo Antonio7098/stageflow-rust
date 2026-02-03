@@ -1089,22 +1089,431 @@ This phase is intentionally split so each helper can be ported independently.
     - `to_otel_attributes()` exports keys:
       - `tts.provider`, `tts.model`, `tts.duration_ms`, `tts.sample_rate`, `tts.format`, `tts.latency_ms`, `tts.byte_count`, `tts.characters_processed`
 
+### 9.11 Websearch helpers (`stageflow/websearch/*`)
+
+- [ ] **Data models (`stageflow/websearch/models.py`)**
+  - **Acceptance criteria**
+    - `PageMetadata`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults:
+        - `title=None`, `description=None`, `language=None`, `author=None`, `published_date=None`, `canonical_url=None`, `og_image=None`, `content_type=None`, `keywords=[]`
+      - `to_dict()` includes all fields.
+      - `from_dict()`:
+        - missing keys default to dataclass defaults
+        - `keywords` defaults to `[]` when missing
+      - Roundtrip `from_dict(to_dict(x)) == x`.
+    - `ExtractedLink`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults:
+        - `text=""`, `title=None`, `rel=None`, `is_internal=False`, `context=None`
+      - `from_element(href, text, base_url=None, title=None, rel=None, context=None)`:
+        - if `base_url` is set and `href` does not start with `http://`, `https://`, `//`, then resolves via `urljoin(base_url, href)`
+        - if `href` starts with `//`, prefixes with `"https:"`
+        - `is_internal` is `True` iff `urlparse(base_url).netloc == urlparse(resolved_url).netloc`
+        - `text` is `.strip()`
+      - `to_dict()` and `from_dict()` preserve all fields.
+    - `NavigationAction`
+      - Frozen dataclass (immutable) with slots.
+      - Required: `action_type`, `label`
+      - Defaults: `url=None`, `selector=None`, `priority=5`, `metadata={}`
+      - `to_dict()` and `from_dict()` preserve all fields.
+    - `PaginationInfo`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults: `current_page=1`, `total_pages=None`, `next_url=None`, `prev_url=None`, `page_urls=[]`
+      - `has_next` iff `next_url is not None`; `has_prev` iff `prev_url is not None`.
+      - `to_dict()` and `from_dict()` preserve all fields.
+    - `WebPage`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults:
+        - `final_url=None`, `status_code=0`, `markdown=""`, `plain_text=""`, `metadata=PageMetadata()`, `links=[]`, `navigation_actions=[]`, `pagination=None`, `fetch_duration_ms=0.0`, `extract_duration_ms=0.0`, `fetched_at=None`, `word_count=0`, `error=None`
+      - `success` is `True` iff `error is None` and `200 <= status_code < 400`.
+      - `title` returns `metadata.title`; `description` returns `metadata.description`.
+      - `internal_links` filters links where `is_internal=True`; `external_links` filters where `is_internal=False`.
+      - `extract_links(selector=None, internal_only=False, external_only=False, limit=None)`:
+        - ignores `selector` (API compatibility)
+        - applies internal/external filters
+        - if `limit` set, returns prefix `links[:limit]`
+      - `to_dict()` includes:
+        - serialized `metadata`, `links`, `navigation_actions`, and `pagination` (or `None`)
+      - `from_dict()`:
+        - rebuilds `metadata`, `links`, `navigation_actions`, `pagination`
+        - missing keys default to the same defaults as constructor
+      - `error_result(url, error, duration_ms=0.0)`:
+        - returns `WebPage` with `status_code=0`, `error=error`, `fetch_duration_ms=duration_ms`, `fetched_at=now(UTC).isoformat()`
+      - `truncate(max_chars=10000)`:
+        - if `len(markdown) <= max_chars`, returns `self` (same instance semantics)
+        - otherwise returns a new page with:
+          - `markdown` truncated to `max_chars` (optionally trimmed to last paragraph break `\n\n` if past half) and appends `"\n\n[Content truncated...]"`
+          - `plain_text` truncated to `max_chars` (optionally trimmed to last sentence boundary `. ` / `! ` / `? ` if past half)
+          - all other fields preserved
+
+- [ ] **Fetcher layer (`stageflow/websearch/fetcher.py`)**
+  - **Acceptance criteria**
+    - Module-level constant `HTTPX_AVAILABLE` reflects import availability of `httpx`.
+    - `FetchConfig`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults:
+        - `timeout=30.0`, `max_retries=3`, `retry_delay=1.0`, `follow_redirects=True`, `max_redirects=10`, `verify_ssl=True`, `max_content_length=10_000_000`
+        - `user_agent` default is StageflowBot UA string
+        - `default_headers` defaults to `{}`
+    - `FetchResult`
+      - Mutable dataclass with slots.
+      - Defaults: `status_code=0`, `content=b""`, `content_type=""`, `headers={}`, `duration_ms=0.0`, `retry_count=0`, `error=None`, `final_url=None`
+      - `request_id` defaults to `str(uuid4())`.
+      - `success` is `True` iff `error is None` and `200 <= status_code < 400`.
+      - `text` decoding:
+        - if content empty, returns empty string
+        - if `content_type` includes `charset=...`, use that encoding
+        - otherwise default `utf-8`
+        - on `UnicodeDecodeError`/unknown codec, decode with `utf-8` and `errors="replace"`
+      - `is_html` is `True` iff content-type contains `text/html` or `application/xhtml`.
+      - `to_dict()` excludes raw bytes, includes `content_length=len(content)` and includes `request_id`.
+    - `Fetcher`
+      - `fetch(url, timeout=None, headers=None, follow_redirects=None)`:
+        - assigns a new `request_id=str(uuid4())` and emits `on_fetch_start(url, request_id)` (exceptions suppressed)
+        - merges headers:
+          - `{"User-Agent": config.user_agent, **config.default_headers, **headers}`
+        - uses `effective_timeout = timeout or config.timeout`
+        - uses `effective_follow = follow_redirects if not None else config.follow_redirects`
+        - retry loop attempts `range(config.max_retries + 1)`
+        - on each attempt:
+          - awaits `_do_fetch(url, timeout=effective_timeout, headers=merged_headers, follow_redirects=effective_follow)`
+          - then overwrites `result.request_id = request_id` and `result.retry_count = retry_count`
+          - sets `result.duration_ms` from `time.perf_counter()` delta
+          - emits `on_fetch_complete(url, request_id, status, duration_ms, size, from_cache=False)` if `result.success`
+          - otherwise emits `on_fetch_error(url, request_id, error_string, duration_ms, retryable=(status_code>=500))`
+          - and returns the `result` immediately (no retry-on-status-code behavior)
+        - on exception:
+          - determines retryable via `_is_retryable_error()` (substring match on lowercased exception string)
+          - if retryable and attempts remain, sleeps `config.retry_delay * (2**attempt)` and continues
+          - else breaks and returns `FetchResult(url=url, error=last_error or "Unknown error", duration_ms=..., retry_count=retry_count, request_id=request_id)` after emitting `on_fetch_error(..., retryable=False)`
+      - `_is_retryable_error()` matches patterns:
+        - `timeout`, `connection`, `reset`, `refused`, `temporary`, `503`, `502`, `504`, `429`
+      - `fetch_many(urls, concurrency=5, timeout=None, headers=None)`:
+        - returns `[]` for empty input
+        - uses `asyncio.Semaphore(concurrency)` and `asyncio.gather` to preserve input order
+    - `HttpFetcher`
+      - Raises `ImportError` if `HTTPX_AVAILABLE` is `False`.
+      - Supports async context manager:
+        - `__aenter__` ensures client created
+        - `__aexit__` calls `close()`
+      - Lazily creates `httpx.AsyncClient` with:
+        - `timeout=httpx.Timeout(config.timeout)`, `follow_redirects=config.follow_redirects`, `max_redirects=config.max_redirects`, `verify=config.verify_ssl`
+      - `_do_fetch` performs `client.get(url, ...)`, sets `final_url=str(response.url)` and `content_type` from headers.
+      - Enforces `max_content_length` truncation if `>0`.
+    - `MockFetcher`
+      - Accepts `responses: {url: (status_code, content(str|bytes), headers)}` and optional `default_response`.
+      - Default response when missing:
+        - `(404, "Not Found", {"content-type": "text/plain"})`
+      - Records `fetch_history` in call order.
+      - `_do_fetch` ignores `timeout/headers/follow_redirects`, returns `FetchResult` with `final_url=url`.
+      - If response content is `str`, encodes as UTF-8 bytes.
+
+- [ ] **Extractor layer (`stageflow/websearch/extractor.py`)**
+  - **Acceptance criteria**
+    - Module-level constant `SELECTOLAX_AVAILABLE` reflects import availability of `selectolax`.
+    - `ExtractionConfig`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults:
+        - preserve flags all `True` (`preserve_headings`, `preserve_lists`, `preserve_links`, `preserve_emphasis`, `preserve_code`, `preserve_blockquotes`, `preserve_tables`)
+        - `max_link_text_length=100`, `max_heading_length=200`, `include_link_urls=True`, `min_text_length=1`
+        - `remove_selectors` includes `script`, `style`, `noscript`, `iframe`, `svg`, `nav`, `footer`, `header`, `aside` and various ad/sidebar/cookie selectors
+        - `main_content_selectors` contains `article`, `main`, `[role="main"]`, and common content containers
+    - `ExtractionResult`
+      - Mutable dataclass with slots.
+      - Defaults: `markdown=""`, `plain_text=""`, `metadata=PageMetadata()`, `links=[]`, `word_count=0`, `heading_outline=[]`
+      - `to_dict()` serializes `metadata` via `to_dict()` and links via `to_dict()`.
+    - `DefaultContentExtractor`
+      - Raises `ImportError` if `SELECTOLAX_AVAILABLE` is `False`.
+      - `extract(html, base_url=None, selector=None)`:
+        - decompose nodes matching all `remove_selectors`
+        - chooses content node:
+          - if `selector` provided and matches, use first match
+          - else first match from `main_content_selectors`
+          - else falls back to `tree.body` else `tree.root`
+        - extracts metadata from full document:
+          - `og:title` overrides `<title>`
+          - `og:description` overrides `meta[name=description]`
+          - `language` from `<html lang=...>`
+          - `author` from meta `author`
+          - `published_date` from meta `article:published_time`
+          - `canonical_url` from `link[rel="canonical"]`
+          - `og_image` from `og:image`
+          - `keywords` from comma-splitting meta `keywords`
+          - `content_type` from `og:type`
+        - extracts links from the content node:
+          - skips `href` starting with `#`, `javascript:`, `mailto:`, `tel:`
+          - resolves relative URLs using `ExtractedLink.from_element` with `base_url`
+          - de-duplicates by final URL
+        - builds markdown/plain_text preserving structure:
+          - headings map to `#`..`######` with `heading_outline` tracking
+          - lists preserve `-` and numbered `1.` format (with indentation)
+          - links become `[text](url)` when `include_link_urls=True`
+          - bold `**text**`, italic `_text_`, inline code `` `code` ``, fenced code blocks using language from `class="language-..."`
+          - blockquotes prefix `> `
+          - tables converted to markdown with header separator row
+          - `br` -> hard break (`"  \n"`), `hr` -> `---`
+        - cleans markdown:
+          - collapses `\n{3,}` to `\n\n`, collapses multiple spaces, unescapes HTML entities, trims
+        - cleans plain text by collapsing whitespace and unescaping entities
+        - `word_count=len(plain_text.split())`
+      - `extract_metadata(html)` works on raw html without removal/selectors.
+      - `extract_links(html, base_url=None, selector=None)`:
+        - decompose nodes matching `remove_selectors`
+        - uses `tree.body`/`tree.root` unless `selector` matched
+    - `FallbackContentExtractor`
+      - Selector is not supported; `extract(..., selector=...)` ignores selector.
+      - Removes scripts/styles/comments via regex.
+      - Extracts headings/paragraphs via regex; decodes HTML entities.
+      - `extract_links` skips `#`/`javascript:`/`mailto:` and resolves relative URLs when `base_url` provided.
+      - `extract_metadata` extracts `<title>` and meta description via regex.
+    - `get_default_extractor(config=None)`:
+      - returns `DefaultContentExtractor` if selectolax available, else `FallbackContentExtractor`.
+
+- [ ] **Navigator layer (`stageflow/websearch/navigator.py`)**
+  - **Acceptance criteria**
+    - Module-level constant `SELECTOLAX_AVAILABLE` reflects import availability of `selectolax`.
+    - `NavigationConfig`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults:
+        - `pagination_selectors` contains `.pagination` and other common selectors
+        - `pagination_link_patterns` includes patterns like `page=\d+` and `offset=\d+`
+        - `next_link_texts` includes `next`, arrows, `older`, `more`
+        - `prev_link_texts` includes `prev`, `previous`, arrows, `newer`, `back`
+        - `nav_link_selectors` contains `nav a`, `.menu a`, and role-based selectors
+        - `content_selectors` contains `article`, `main`, `[role="main"]`, `#content`, `.content`, etc.
+        - `min_nav_links=3`, `max_actions=20`
+    - `NavigationResult`
+      - Mutable dataclass with slots.
+      - Defaults: `actions=[]`, `pagination=None`, `main_content_selector=None`, `nav_links=[]`, `breadcrumbs=[]`
+      - `to_dict()` serializes `actions`, `pagination`, `nav_links`, `breadcrumbs`.
+    - `PageNavigator`
+      - Raises `ImportError` if `SELECTOLAX_AVAILABLE` is `False`.
+      - `analyze(html, base_url=None)`:
+        - extracts `pagination`, `main_content_selector`, `nav_links`, `breadcrumbs`
+        - builds `actions` with priority ordering:
+          - pagination next => `priority=1`, label `"Next page"`, metadata `{"direction":"next"}`
+          - pagination prev => `priority=2`, label `"Previous page"`, metadata `{"direction":"prev"}`
+          - nav links => `action_type="nav_link"`, `priority=3`
+          - content links => `action_type="content_link"`, `priority=4`
+        - respects `max_actions` cap
+        - does not add duplicate action URLs (content links skipped when URL already present)
+      - Pagination detection:
+        - first checks `pagination_selectors`; if found parses container:
+          - recognizes next/prev by link text tokens or class contains `next`/`prev`
+          - collects other link hrefs as `page_urls`
+          - extracts `current_page` from `.current, .active, [aria-current='page']` if digit
+          - sets `total_pages=len(page_urls)+1` when page_urls non-empty else `None`
+        - if no container, falls back to scanning all `a[href]` for URL pattern matches; if >=2 links:
+          - sorts by extracted page number (missing => 0)
+          - returns `PaginationInfo(current_page=1, page_urls=[...], next_url=first_sorted_url)`
+      - Main content selector detection:
+        - returns first `content_selectors` match with `text_len > 200`
+        - else searches `div[class]`/`div[id]` candidates with keywords, choosing max text length and returns `".<class>"` or `"#<id>"`
+      - Nav links extracted from `nav_link_selectors` and de-duplicated by URL; skips `#` and `javascript:`.
+      - Breadcrumbs extracted from a fixed selector list and stops after first selector yielding any links.
+      - Content links extracted from detected main content node (or body/root), skipping `#`/`javascript:`/`mailto:`/`tel:` and skipping link texts shorter than 3 chars.
+    - `FallbackNavigator`
+      - Uses regex to find anchors, identifies next/prev via text tokens and class string.
+      - Produces `PaginationInfo(current_page=1, next_url=?, prev_url=?)` when found.
+      - Produces pagination actions with priorities 1/2.
+      - Does not attempt main content selector, nav links, or breadcrumbs (all empty/None).
+    - `get_default_navigator(config=None)`:
+      - returns `PageNavigator` if selectolax available, else `FallbackNavigator`.
+
+- [ ] **Client layer (`stageflow/websearch/client.py`)**
+  - **Acceptance criteria**
+    - `WebSearchConfig`
+      - Frozen dataclass (immutable) with slots.
+      - Defaults:
+        - `max_concurrent=5`, `auto_extract=True`, `auto_navigate=True`
+        - `fetch=FetchConfig()`, `extraction=ExtractionConfig()`, `navigation=NavigationConfig()`
+    - `WebSearchClient.__init__` wiring
+      - If `fetcher` provided, client does not own it and does not auto-close it.
+      - Else:
+        - if `HTTPX_AVAILABLE`, uses `HttpFetcher(config.fetch, on_fetch_start, on_fetch_complete, on_fetch_error)` and marks it owned
+        - otherwise raises `ImportError("httpx is required for WebSearchClient...")`
+      - Chooses extractor:
+        - provided `extractor` else `DefaultContentExtractor(config.extraction)` when selectolax available else `FallbackContentExtractor(config.extraction)`
+      - Chooses navigator:
+        - provided `navigator` else `PageNavigator(config.navigation)` when selectolax available else `FallbackNavigator(config.navigation)`
+    - Async context management:
+      - `__aenter__` delegates to fetcher `__aenter__` if present
+      - `close()` closes owned fetcher if it has `close()`
+      - `__aexit__` calls `close()`
+    - `fetch(url, timeout=None, headers=None, selector=None, extract=None, navigate=None)`:
+      - generates a local `request_id=str(uuid4())` used only for `on_extract_complete`
+      - `should_extract` defaults from `config.auto_extract` unless overridden
+      - `should_navigate` defaults from `config.auto_navigate` unless overridden
+      - calls `fetcher.fetch(url, timeout=..., headers=...)`
+      - on fetch failure returns `WebPage.error_result(url, error_or_http_status, fetch_duration_ms)`
+      - on non-HTML fetch result:
+        - returns `WebPage` with `markdown/plain_text = fetch_result.text[:10000]`, `word_count=len(text.split())`, `fetched_at=now(UTC).isoformat()`
+      - on HTML:
+        - if extracting:
+          - uses extractor `extract(html, base_url=final_url_or_url, selector=selector)`
+        - else:
+          - `markdown=""`, `plain_text=""`, `links=[]`, `word_count=0`, but still extracts metadata via `extract_metadata(html)`
+        - if navigating:
+          - uses navigator `analyze(html, base_url=final_url_or_url)` and attaches actions + pagination
+        - computes `extract_duration_ms` from perf counter around extraction/navigation section
+        - calls optional `on_extract_complete(url, request_id, extract_duration_ms, len(markdown), len(links))` with exceptions suppressed
+    - `fetch_many(urls, concurrency=None, ...)`:
+      - returns `[]` for empty input
+      - uses `asyncio.Semaphore(concurrency or config.max_concurrent)` and `asyncio.gather` to preserve order
+    - `fetch_with_navigation(url, max_pages=10, follow_pagination=True, ...)`:
+      - iteratively fetches pages, tracking `seen_urls` to avoid loops
+      - stops when:
+        - `len(pages) == max_pages`, or
+        - next URL is `None`, or
+        - `follow_pagination` is `False`, or
+        - URL repeats
+      - uses `page.pagination.next_url` to advance
+    - `crawl(start_url, max_pages=10, max_depth=2, same_domain_only=True, link_filter=None, ...)`:
+      - BFS-like loop over a list queue of `(url, depth)`
+      - `seen_urls` prevents repeats
+      - `start_domain=urlparse(start_url).netloc`
+      - if `same_domain_only`, skips links whose `netloc` differs
+      - if `link_filter` provided, only enqueues links where `link_filter(link)` is truthy
+      - does not special-case failed pages when extracting links (enqueues based on `page.links`)
+    - `extract_content(html, base_url=None, selector=None)`:
+      - extracts with extractor + navigator without fetching
+      - returns `WebPage(url=base_url or "", status_code=200, fetched_at=now(UTC).isoformat(), extract_duration_ms>0)`
+    - `create_mock_client(responses=None, config=None)`:
+      - constructs `MockFetcher(responses, config=config.fetch if config else None)` and returns `WebSearchClient(config, fetcher=mock_fetcher)`
+
+- [ ] **Run utilities (`stageflow/websearch/run_utils.py`)**
+  - **Acceptance criteria**
+    - `FetchProgress`:
+      - mutable dataclass with defaults: `completed=0`, `total=0`, `current_url=None`, `success_count=0`, `error_count=0`, `elapsed_ms=0.0`
+      - `percent` is `(completed/total*100)` else `0.0`
+    - `SearchResult`:
+      - includes: `query`, `pages`, `relevant_pages`, `total_words`, `duration_ms`
+      - `to_dict()` includes counts (`pages_fetched`, `relevant_pages`) and totals (not raw pages)
+    - `SiteMap`:
+      - includes: `start_url`, `pages`, `internal_links`, `external_links`, `depth_reached`, `duration_ms`
+      - `to_dict()` includes counts (`pages_crawled`, internal/external counts) and totals
+    - `fetch_page(url, ...)`:
+      - uses internal async context manager that creates `WebSearchClient(config)` unless `client_factory` provided
+    - `fetch_pages(urls, concurrency=5, ..., on_progress=None, parallel_extraction=True)`:
+      - returns `[]` for empty input
+      - results preserve input order
+      - uses `asyncio.Semaphore(concurrency)`
+      - maintains a single `FetchProgress(total=len(urls))` updated on each completion:
+        - increments `completed`, increments `success_count` or `error_count`, updates `elapsed_ms` from wall-clock UTC time
+        - calls `on_progress(progress)` if provided
+      - if `parallel_extraction=True`:
+        - uses `client._fetcher.fetch(...)` to fetch raw HTML
+        - on success + HTML, runs extraction + navigation via thread pool executor (`max_workers=4`, thread_name_prefix=`extract`)
+        - on success + non-HTML, returns `WebPage` with markdown/plain_text truncated to 10000 and `word_count=len(text.split())`
+        - on failure, returns `WebPage.error_result(url, error_or_http_status, duration_ms)`
+      - if `parallel_extraction=False`, delegates to `client.fetch(...)`
+      - returns only non-None results (should be all slots filled)
+    - `search_and_extract(start_url, query, ...)`:
+      - crawls via `client.crawl(...)`
+      - relevance scoring:
+        - `query_terms=set(query.lower().split())`
+        - `content=(title + plain_text).lower()`
+        - `score = matches/len(query_terms)` (0 if query_terms empty)
+        - includes pages where `score >= relevance_threshold`
+      - sorts `relevant_pages` by number of matching terms desc
+      - computes `total_words=sum(word_count)` across `relevant_pages`
+      - `duration_ms` from UTC wall clock
+    - `map_site(start_url, ...)`:
+      - crawls via `client.crawl(...)` with optional `link_filter`
+      - collects unique links across all pages by URL:
+        - `internal_links` when `link.is_internal`
+        - `external_links` when `include_external=True` and `not is_internal`
+      - sets `depth_reached=max_depth` (requested depth, not observed depth)
+      - `duration_ms` from UTC wall clock
+    - `fetch_with_retry(url, max_retries=3, retry_delay=1.0, ...)`:
+      - attempts `max_retries + 1` times
+      - returns on first success
+      - exponential backoff sleep: `retry_delay * (attempt + 1)`
+      - on exhaustion returns `WebPage.error_result(url, f"Failed after {max_retries + 1} attempts: {last_error}", 0.0)`
+    - `extract_all_links(urls, concurrency=10, internal_only=False, external_only=False)`:
+      - fetches pages via `fetch_pages`
+      - skips failed pages
+      - de-duplicates by URL
+      - enforces internal/external filters
+    - `shutdown_extraction_pool()`:
+      - calls executor `.shutdown(wait=True)` and sets global executor to `None`
+
+- [ ] **Protocols (`stageflow/websearch/protocols.py`)**
+  - **Acceptance criteria**
+    - `FetcherProtocol`, `ContentExtractorProtocol`, `NavigatorProtocol`, `ObservabilityProtocol` are `@runtime_checkable` protocols defining the method signatures used by the websearch implementation.
+
 ---
 
 ## Phase 10 — Parity test suite and completeness gates
 
-- [ ] **Golden payload tests**
+- [ ] **Golden payload fixtures (event-level JSON parity)**
   - **Acceptance criteria**
-    - For each emitted event type, Rust produces payloads with:
-      - correct required fields
-      - stable types (string/null)
-      - stable sorting rules (e.g. `data_keys`)
+    - For each emitted event type covered by the Python test suite, Rust produces payloads that match a canonical JSON fixture after normalization:
+      - stable key ordering (object keys sorted, lists sorted only where Python semantics sort)
+      - stable types (`str`/`null` where Python uses `str(x)` or `None`)
+      - stable timestamp formatting (ISO 8601; timezone handling matches Python)
+      - stable `data_keys` sorting rules and other explicitly sorted fields
+    - Fixture generation process is deterministic:
+      - fixtures are derived from running the Python pipeline/tests with controlled clocks/UUIDs where necessary
+      - any intentionally variable fields are explicitly normalized (or removed) in both Python and Rust harnesses
 
-- [ ] **Behavioral parity matrix**
+- [ ] **Behavioral parity matrix (Python tests -> Rust tests)**
   - **Acceptance criteria**
-    - Each Python test category has a Rust analog test module.
+    - Every Python test module has a Rust analog (by module name or by explicit mapping) that asserts the same behavioral contract.
+    - At minimum, include explicit mapping rows for:
+      - `tests/unit/test_execution_context.py`
+      - `tests/execution/test_dag.py`
+      - `tests/unit/pipeline/test_builder.py`
+      - `tests/pipeline/test_builder_helpers.py`
+      - `tests/unit/pipeline/test_cancellation.py`
+      - `tests/unit/test_advanced_tool_executor.py`
+      - `tests/unit/tools/test_registry.py`
+      - `tests/unit/test_tool_registry_parse.py`
+      - `tests/unit/tools/test_approval.py`
+      - `tests/unit/tools/test_errors.py`
+      - `tests/unit/test_helpers_analytics.py`
+      - `tests/unit/test_helpers_streaming.py`
+      - `tests/unit/test_helpers_guardrails.py`
+      - `tests/unit/test_helpers_memory.py`
+      - `tests/unit/test_helpers_mocks.py`
+      - `tests/unit/test_helpers_runtime.py`
+      - `tests/unit/test_helpers_runtime_integrated.py`
+      - `tests/unit/test_events.py`
+      - `tests/unit/events/test_backpressure_sink.py`
+      - `tests/unit/test_helpers_timestamps.py`
+      - `tests/unit/test_helpers_providers.py`
+      - `tests/websearch/test_models.py`
+      - `tests/websearch/test_fetcher.py`
+      - `tests/websearch/test_extractor.py`
+      - `tests/websearch/test_navigator.py`
+      - `tests/websearch/test_client.py`
+      - `tests/websearch/test_run_utils.py`
+      - `tests/websearch/test_exports.py`
+
+- [ ] **Export-surface parity gates**
+  - **Acceptance criteria**
+    - Rust crate exposes the same conceptual “public surface” as Python exports:
+      - core pipeline types, contexts, events/sinks, tools, helpers, and testing utilities
+    - Any intentional deviations are captured as checklist exceptions with:
+      - rationale
+      - migration guidance
+      - explicit acceptance tests proving equivalence at the behavior level
+
+- [ ] **Determinism + concurrency invariants**
+  - **Acceptance criteria**
+    - Parity tests include at least one run that validates deterministic behavior for:
+      - stable ordering of stage execution where DAG allows non-determinism (must match Python strategy)
+      - stable event emission ordering for stage lifecycle and tool lifecycle
+      - bounded-queue backpressure behavior (drop vs block semantics) matching Python sink(s)
+    - No test is allowed to pass “by luck” due to timing; concurrency-sensitive tests must use synchronization points.
 
 - [ ] **Porting completion definition**
   - **Acceptance criteria**
     - Every item in Phases 1–9 is checked.
+    - Phase 10 gates are green:
+      - golden fixtures match
+      - parity matrix complete
+      - export-surface parity validated
+      - determinism/concurrency invariants validated
     - Rust test suite passes and covers the same edge cases described here.

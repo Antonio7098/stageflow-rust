@@ -1,0 +1,69 @@
+[package]
+name = "stageflow"
+description = "A Rust port of the stageflow pipeline framework"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["full"]
+full = ["websearch"]
+websearch = ["dep:reqwest", "dep:scraper"]
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# UUID and time
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Hashing
+md-5 = { workspace = true }
+base64 = { workspace = true }
+
+# Regex
+regex = { workspace = true }
+
+# HTTP client (optional)
+reqwest = { workspace = true, optional = true }
+
+# HTML parsing (optional)
+scraper = { version = "0.20", optional = true }
+
+# Parking lot for better mutexes
+parking_lot = "0.12"
+
+# Dashmap for concurrent hashmaps
+dashmap = "6.0"
+
+# Random number generation
+rand = "0.8"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio-test = { workspace = true }
+mockall = { workspace = true }
+criterion = { workspace = true }
+tempfile = "3.12"
+
+[[bench]]
+name = "pipeline_bench"
+harness = false
