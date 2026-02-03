@@ -1,23 +1,7 @@
 //! Web search and content extraction (requires `websearch` feature).
+//!
+//! This module is a stub. The full implementation requires the `websearch` feature
+//! and additional dependencies (reqwest, scraper).
 
-#[cfg(feature = "websearch")]
-mod client;
-#[cfg(feature = "websearch")]
-mod extractor;
-#[cfg(feature = "websearch")]
-mod fetcher;
-#[cfg(feature = "websearch")]
-mod models;
-#[cfg(feature = "websearch")]
-mod navigator;
-
-#[cfg(feature = "websearch")]
-pub use client::WebSearchClient;
-#[cfg(feature = "websearch")]
-pub use extractor::{ContentExtractor, ExtractionConfig, ExtractionResult};
-#[cfg(feature = "websearch")]
-pub use fetcher::{FetchConfig, FetchResult, Fetcher};
-#[cfg(feature = "websearch")]
-pub use models::{ExtractedLink, NavigationAction, PageMetadata, PaginationInfo, WebPage};
-#[cfg(feature = "websearch")]
-pub use navigator::{NavigationConfig, NavigationResult, PageNavigator};
+// Note: The websearch feature requires additional implementation files.
+// This is a placeholder module for the feature gate.
