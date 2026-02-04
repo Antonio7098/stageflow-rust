@@ -441,6 +441,214 @@ fn json_to_py(py: Python<'_>, value: &serde_json::Value) -> PyObject {
     }
 }
 
+/// Python wrapper for ContractErrorInfo.
+#[pyclass(name = "ContractErrorInfo")]
+#[derive(Clone)]
+pub struct PyContractErrorInfo {
+    code: String,
+    summary: String,
+    fix_hint: Option<String>,
+    doc_url: Option<String>,
+    context: HashMap<String, serde_json::Value>,
+}
+
+#[pymethods]
+impl PyContractErrorInfo {
+    #[new]
+    fn new(code: String, summary: String) -> Self {
+        Self {
+            code,
+            summary,
+            fix_hint: None,
+            doc_url: None,
+            context: HashMap::new(),
+        }
+    }
+
+    #[getter]
+    fn code(&self) -> &str {
+        &self.code
+    }
+
+    #[getter]
+    fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    #[getter]
+    fn fix_hint(&self) -> Option<&str> {
+        self.fix_hint.as_deref()
+    }
+
+    #[getter]
+    fn doc_url(&self) -> Option<&str> {
+        self.doc_url.as_deref()
+    }
+
+    fn with_fix_hint(&self, hint: String) -> Self {
+        let mut new = self.clone();
+        new.fix_hint = Some(hint);
+        new
+    }
+
+    fn with_doc_url(&self, url: String) -> Self {
+        let mut new = self.clone();
+        new.doc_url = Some(url);
+        new
+    }
+
+    fn with_context(&self, key: String, value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut new = self.clone();
+        new.context.insert(key, py_to_json(value)?);
+        Ok(new)
+    }
+
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("code", &self.code)?;
+        dict.set_item("summary", &self.summary)?;
+        if let Some(ref hint) = self.fix_hint {
+            dict.set_item("fix_hint", hint)?;
+        }
+        if let Some(ref url) = self.doc_url {
+            dict.set_item("doc_url", url)?;
+        }
+        if !self.context.is_empty() {
+            let ctx_dict = PyDict::new_bound(py);
+            for (k, v) in &self.context {
+                ctx_dict.set_item(k, json_to_py(py, v))?;
+            }
+            dict.set_item("context", ctx_dict)?;
+        }
+        Ok(dict.into())
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ContractErrorInfo(code='{}', summary='{}')", self.code, self.summary)
+    }
+}
+
+/// Python wrapper for StageResult.
+#[pyclass(name = "StageResult")]
+#[derive(Clone)]
+pub struct PyStageResult {
+    name: String,
+    status: String,
+    started_at: String,
+    ended_at: String,
+    data: HashMap<String, serde_json::Value>,
+    error: Option<String>,
+}
+
+#[pymethods]
+impl PyStageResult {
+    #[new]
+    fn new(name: String, status: String, started_at: String, ended_at: String) -> Self {
+        Self {
+            name,
+            status,
+            started_at,
+            ended_at,
+            data: HashMap::new(),
+            error: None,
+        }
+    }
+
+    #[staticmethod]
+    fn completed(name: String, started_at: String, data: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let data_map = dict_to_hashmap(data)?;
+        Ok(Self {
+            name,
+            status: "completed".to_string(),
+            started_at,
+            ended_at: chrono::Utc::now().to_rfc3339(),
+            data: data_map,
+            error: None,
+        })
+    }
+
+    #[staticmethod]
+    fn failed(name: String, started_at: String, error: String) -> Self {
+        Self {
+            name,
+            status: "failed".to_string(),
+            started_at,
+            ended_at: chrono::Utc::now().to_rfc3339(),
+            data: HashMap::new(),
+            error: Some(error),
+        }
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[getter]
+    fn status(&self) -> &str {
+        &self.status
+    }
+
+    fn is_success(&self) -> bool {
+        self.status == "completed"
+    }
+
+    fn is_failure(&self) -> bool {
+        self.status == "failed"
+    }
+
+    fn __repr__(&self) -> String {
+        format!("StageResult(name='{}', status='{}')", self.name, self.status)
+    }
+}
+
+/// Python wrapper for PipelineValidationError.
+#[pyclass(name = "PipelineValidationError")]
+#[derive(Clone)]
+pub struct PyPipelineValidationError {
+    message: String,
+    stages: Vec<String>,
+    error_info: Option<PyContractErrorInfo>,
+}
+
+#[pymethods]
+impl PyPipelineValidationError {
+    #[new]
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            stages: Vec::new(),
+            error_info: None,
+        }
+    }
+
+    #[getter]
+    fn message(&self) -> &str {
+        &self.message
+    }
+
+    #[getter]
+    fn stages(&self) -> Vec<String> {
+        self.stages.clone()
+    }
+
+    fn with_stages(&self, stages: Vec<String>) -> Self {
+        let mut new = self.clone();
+        new.stages = stages;
+        new
+    }
+
+    fn with_error_info(&self, info: PyContractErrorInfo) -> Self {
+        let mut new = self.clone();
+        new.error_info = Some(info);
+        new
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PipelineValidationError('{}')", self.message)
+    }
+}
+
 /// The stageflow Python module.
 #[pymodule]
 fn stageflow_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -449,6 +657,9 @@ fn stageflow_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRunIdentity>()?;
     m.add_class::<PyRetryConfig>()?;
     m.add_class::<PyFailureMode>()?;
+    m.add_class::<PyContractErrorInfo>()?;
+    m.add_class::<PyStageResult>()?;
+    m.add_class::<PyPipelineValidationError>()?;
     
     // Add version info
     m.add("__version__", "0.1.0")?;

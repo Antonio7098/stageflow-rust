@@ -2,6 +2,12 @@
 //!
 //! Stages are the fundamental units of work in a stageflow pipeline.
 
+mod ports;
+mod result;
+
+pub use ports::{AudioPorts, CorePorts, LLMPorts, StagePorts};
+pub use result::{LegacyStageStatus, StageError, StageResult};
+
 use crate::context::StageContext;
 use crate::core::StageOutput;
 use async_trait::async_trait;
