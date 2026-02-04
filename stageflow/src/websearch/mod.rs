@@ -1,7 +1,12 @@
-//! Web search and content extraction (requires `websearch` feature).
+//! Web search and content extraction utilities.
 //!
-//! This module is a stub. The full implementation requires the `websearch` feature
-//! and additional dependencies (reqwest, scraper).
+//! This module provides:
+//! - Data models for web pages and links
+//! - Content extraction from HTML
+//! - Navigation and pagination detection
 
-// Note: The websearch feature requires additional implementation files.
-// This is a placeholder module for the feature gate.
+mod models;
+
+pub use models::{
+    ExtractedLink, NavigationAction, PageMetadata, PaginationInfo, WebPage,
+};
