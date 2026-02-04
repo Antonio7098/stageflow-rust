@@ -8,6 +8,8 @@
 mod artifact;
 mod event;
 mod output;
+#[cfg(test)]
+mod output_tests;
 mod status;
 
 pub use artifact::StageArtifact;
