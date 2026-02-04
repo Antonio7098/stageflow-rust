@@ -13,6 +13,8 @@ mod dag;
 mod failure_tolerance;
 mod guard_retry;
 mod idempotency;
+#[cfg(test)]
+mod integration_tests;
 mod interfaces;
 mod retry;
 mod spec;
