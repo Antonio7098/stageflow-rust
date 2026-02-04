@@ -1,0 +1,16 @@
+[package]
+name = "stageflow-py"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for the stageflow Rust library"
+
+[lib]
+name = "stageflow_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+stageflow = { path = "../stageflow" }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+uuid = { version = "1.10", features = ["v4"] }
