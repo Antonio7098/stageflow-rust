@@ -54,6 +54,7 @@ pub mod observability;
 pub mod pipeline;
 pub mod stages;
 pub mod subpipeline;
+pub mod testing;
 pub mod tools;
 pub mod utils;
 
