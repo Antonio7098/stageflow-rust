@@ -44,6 +44,7 @@
 pub mod cancellation;
 pub mod compression;
 pub mod context;
+pub mod contracts;
 pub mod core;
 pub mod errors;
 pub mod events;
