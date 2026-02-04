@@ -13,6 +13,7 @@ mod dag;
 mod failure_tolerance;
 mod guard_retry;
 mod idempotency;
+mod interfaces;
 mod retry;
 mod spec;
 mod unified;
@@ -38,6 +39,10 @@ pub use idempotency::{
 pub use retry::{
     BackoffStrategy, JitterStrategy, RetryConfig, RetryDecision, RetryState,
     should_retry, with_retry,
+};
+pub use interfaces::{
+    ConditionalStage, ConfigurableStage, DependentStage, IdempotentStage,
+    ObservableStage, ParallelSafeStage, RetryableStage, StageCapabilities,
 };
 pub use spec::{PipelineSpec, StageSpec};
 pub use unified::UnifiedStageGraph;

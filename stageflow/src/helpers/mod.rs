@@ -8,6 +8,7 @@ pub mod providers;
 pub mod runtime;
 pub mod streaming;
 pub mod timestamps;
+pub mod uuid_utils;
 
 pub use analytics::{AnalyticsEvent, AnalyticsSink, BufferedExporter, ConsoleExporter, JSONFileExporter};
 pub use guardrails::{ContentFilter, GuardrailResult, GuardrailStage, InjectionDetector, PIIDetector, PolicyViolation};
@@ -17,3 +18,6 @@ pub use providers::{LLMResponse, STTResponse, TTSResponse};
 pub use runtime::{RetryPolicy, TimeoutConfig, TimedResult, run_with_retry, run_with_timeout, run_cleanup_with_timeout};
 pub use streaming::{AudioChunk, BackpressureMonitor, ChunkQueue, StreamingBuffer};
 pub use timestamps::{detect_unix_precision, normalize_to_utc, parse_timestamp as parse_ts};
+pub use uuid_utils::{
+    ClockSkewDetector, UuidCollisionMonitor, UuidEvent, generate_uuid4, generate_uuid7,
+};
