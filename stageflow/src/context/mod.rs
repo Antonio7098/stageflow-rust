@@ -6,6 +6,8 @@
 //! - Thread-safe data bags for storing outputs
 
 mod bags;
+#[cfg(test)]
+mod context_tests;
 mod execution;
 mod identity;
 mod inputs;
