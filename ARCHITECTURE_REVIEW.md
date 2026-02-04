@@ -159,10 +159,10 @@ impl PipelineBuilder {
 
 ### High Priority
 
-1. **Parallel Stage Execution**
-   - Current topological execution is sequential
-   - Stages with satisfied dependencies could run in parallel
-   - Use `FuturesUnordered` for concurrent execution
+### 1. **Parallel Stage Execution** ✅ IMPLEMENTED
+   - StageGraph now uses `FuturesUnordered` for concurrent execution
+   - Stages execute as soon as dependencies are satisfied
+   - Matches Python's `asyncio.wait(FIRST_COMPLETED)` behavior
 
 2. **Stage Result Caching**
    - Extend `IdempotencyInterceptor` to support external cache backends (Redis, etc.)
