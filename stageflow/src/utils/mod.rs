@@ -5,9 +5,15 @@
 
 pub mod timestamps;
 mod uuid_utils;
+pub mod validation;
 
 pub use timestamps::{iso_timestamp, parse_timestamp, Timestamp, UnixPrecision};
 pub use uuid_utils::{generate_uuid, generate_uuid_v7, UuidCollisionMonitor, UuidEvent};
+pub use validation::{
+    CycleError, InvalidNameError, MissingDependencyError, SelfDependencyError,
+    ValidationError, validate_all, validate_dag, validate_dependencies_exist,
+    validate_no_self_dependencies, validate_stage_name,
+};
 
 #[cfg(test)]
 mod tests {
