@@ -72,6 +72,18 @@ impl StageGraph {
         &self.execution_order
     }
 
+    /// Returns a stage spec by name.
+    #[must_use]
+    pub fn stage_spec(&self, name: &str) -> Option<&StageSpec> {
+        self.stages.get(name)
+    }
+
+    /// Returns all stage specs.
+    #[must_use]
+    pub fn stage_specs(&self) -> &HashMap<String, StageSpec> {
+        &self.stages
+    }
+
     /// Executes the stage graph with parallel execution.
     ///
     /// Stages are executed as soon as their dependencies are satisfied,

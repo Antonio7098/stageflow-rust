@@ -1,8 +1,9 @@
 //! Advanced tool executor with approval and undo support.
 
-use super::{ApprovalService, ToolDefinition, ToolInput, ToolOutput, ToolRegistry, UndoMetadata, UndoStore};
+use super::{ApprovalService, Tool, ToolDefinition, ToolInput, ToolOutput, ToolRegistry, UndoMetadata, UndoStore};
 use crate::context::ExecutionContext;
 use crate::errors::ToolError;
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
@@ -143,10 +144,24 @@ impl AdvancedToolExecutor {
             })),
         );
 
-        // Execute the tool
-        // In a real implementation, we'd call the actual tool handler here
-        // For now, return a placeholder success
-        let output = ToolOutput::ok(Some(serde_json::json!({"status": "executed"})));
+        let tool = self
+            .registry
+            .get_tool(&definition.action_type)
+            .ok_or_else(|| ToolError::not_found(&definition.action_type))?;
+
+        let output = match tool.execute(input.clone()).await {
+            Ok(out) => out,
+            Err(e) => {
+                ctx.try_emit_event(
+                    "tool.failed",
+                    Some(serde_json::json!({
+                        "tool": input.tool_name,
+                        "error": e.to_string(),
+                    })),
+                );
+                return Err(e);
+            }
+        };
 
         if output.success {
             ctx.try_emit_event(
@@ -161,7 +176,7 @@ impl AdvancedToolExecutor {
                 if let Some(ref undo_data) = output.undo_metadata {
                     let metadata = UndoMetadata::new(
                         input.action_id,
-                        &input.tool_name,
+                        &definition.action_type,
                         undo_data.clone(),
                     );
                     self.undo_store.store(metadata);
@@ -192,11 +207,14 @@ impl AdvancedToolExecutor {
             None => return Ok(false),
         };
 
-        // In a real implementation, we'd call the undo handler here
-        // For now, simulate success
-        let success = true;
+        let tool = self
+            .registry
+            .get_tool(&metadata.tool_name)
+            .ok_or_else(|| ToolError::not_found(&metadata.tool_name))?;
 
-        if success {
+        tool.undo(&metadata).await?;
+
+        {
             ctx.try_emit_event(
                 "tool.undone",
                 Some(serde_json::json!({
@@ -207,16 +225,6 @@ impl AdvancedToolExecutor {
 
             self.undo_store.remove(action_id);
             Ok(true)
-        } else {
-            ctx.try_emit_event(
-                "tool.undo_failed",
-                Some(serde_json::json!({
-                    "tool": metadata.tool_name,
-                    "action_id": action_id.to_string(),
-                })),
-            );
-
-            Err(ToolError::undo_failed(&metadata.tool_name, "Undo operation failed"))
         }
     }
 }
@@ -235,9 +243,45 @@ mod tests {
     use crate::context::{DictContextAdapter, PipelineContext, RunIdentity};
     use std::collections::HashMap;
 
+    struct TestTool {
+        action_type: String,
+        name: String,
+    }
+
+    #[async_trait]
+    impl Tool for TestTool {
+        fn action_type(&self) -> &str {
+            &self.action_type
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition::new(&self.name, &self.action_type)
+        }
+
+        async fn execute(&self, input: ToolInput) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::ok(Some(serde_json::json!({
+                "echo": input.payload,
+            }))))
+        }
+
+        async fn undo(&self, _metadata: &UndoMetadata) -> Result<(), ToolError> {
+            Ok(())
+        }
+    }
+
     fn create_executor() -> AdvancedToolExecutor {
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(Box::new(TestTool {
+            action_type: "test_action".to_string(),
+            name: "test".to_string(),
+        }));
+
         AdvancedToolExecutor::new(
-            Arc::new(ToolRegistry::new()),
+            registry,
             Arc::new(ApprovalService::new()),
             Arc::new(UndoStore::default()),
         )
@@ -252,8 +296,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_simple() {
         let executor = create_executor();
-        let input = ToolInput::new("test_tool", serde_json::json!({}));
-        let definition = ToolDefinition::new("test_tool", "test_action");
+        let input = ToolInput::new("test", serde_json::json!({"x": 1}));
+        let definition = ToolDefinition::new("test", "test_action");
         let ctx = DictContextAdapter::new(HashMap::new());
 
         let result = executor.execute(input, &definition, &ctx).await;

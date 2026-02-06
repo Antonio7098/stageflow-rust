@@ -7,22 +7,18 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKind {
-    /// A stage that performs actual work (e.g., API calls, computations).
-    Work,
-    /// A stage that routes or decides between paths.
-    Router,
-    /// A stage that guards execution (validation, authorization).
-    Guard,
-    /// A stage that transforms data.
+    /// A stage that transforms data (e.g., STT, TTS, LLM - change input form).
     Transform,
-    /// A stage that aggregates multiple inputs.
-    Aggregate,
-    /// A stage that fans out to parallel execution.
-    FanOut,
-    /// A stage that fans in from parallel execution.
-    FanIn,
-    /// A custom stage kind.
-    Custom,
+    /// A stage that enriches context (e.g., Profile, Memory, Skills - add context).
+    Enrich,
+    /// A stage that routes or decides between paths (e.g., Router, Dispatcher).
+    Route,
+    /// A stage that guards execution (e.g., Guardrails, Policy - validate).
+    Guard,
+    /// A stage that performs actual work / side effects (e.g., Persist, Notify).
+    Work,
+    /// A stage that represents an agent / main interactor.
+    Agent,
 }
 
 impl Default for StageKind {
@@ -34,14 +30,12 @@ impl Default for StageKind {
 impl fmt::Display for StageKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Work => write!(f, "work"),
-            Self::Router => write!(f, "router"),
-            Self::Guard => write!(f, "guard"),
             Self::Transform => write!(f, "transform"),
-            Self::Aggregate => write!(f, "aggregate"),
-            Self::FanOut => write!(f, "fan_out"),
-            Self::FanIn => write!(f, "fan_in"),
-            Self::Custom => write!(f, "custom"),
+            Self::Enrich => write!(f, "enrich"),
+            Self::Route => write!(f, "route"),
+            Self::Guard => write!(f, "guard"),
+            Self::Work => write!(f, "work"),
+            Self::Agent => write!(f, "agent"),
         }
     }
 }
@@ -113,8 +107,11 @@ mod tests {
     #[test]
     fn test_stage_kind_display() {
         assert_eq!(StageKind::Work.to_string(), "work");
-        assert_eq!(StageKind::Router.to_string(), "router");
+        assert_eq!(StageKind::Route.to_string(), "route");
         assert_eq!(StageKind::Guard.to_string(), "guard");
+        assert_eq!(StageKind::Transform.to_string(), "transform");
+        assert_eq!(StageKind::Enrich.to_string(), "enrich");
+        assert_eq!(StageKind::Agent.to_string(), "agent");
     }
 
     #[test]
@@ -145,8 +142,8 @@ mod tests {
 
     #[test]
     fn test_stage_kind_serialize() {
-        let kind = StageKind::FanOut;
+        let kind = StageKind::Route;
         let json = serde_json::to_string(&kind).unwrap();
-        assert_eq!(json, r#""fan_out""#);
+        assert_eq!(json, r#""route""#);
     }
 }

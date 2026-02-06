@@ -1,7 +1,8 @@
 //! Tool registry for managing tool instances.
 
-use super::ToolDefinition;
+use super::{ToolDefinition, ToolInput, ToolOutput, UndoMetadata};
 use crate::errors::ToolError;
+use async_trait::async_trait;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -34,9 +35,10 @@ pub struct UnresolvedToolCall {
 }
 
 /// Factory function type for creating tools.
-pub type ToolFactory = Box<dyn Fn() -> Box<dyn Tool> + Send + Sync>;
+pub type ToolFactory = Arc<dyn Fn() -> Arc<dyn Tool> + Send + Sync>;
 
 /// Trait for tool implementations.
+#[async_trait]
 pub trait Tool: Send + Sync {
     /// Returns the tool's action type.
     fn action_type(&self) -> &str;
@@ -46,13 +48,29 @@ pub trait Tool: Send + Sync {
     
     /// Returns the tool definition.
     fn definition(&self) -> ToolDefinition;
+
+    /// Executes the tool.
+    async fn execute(&self, _input: ToolInput) -> Result<ToolOutput, ToolError> {
+        Err(ToolError::execution_failed(
+            self.name(),
+            "Tool has no execute implementation",
+        ))
+    }
+
+    /// Undoes a prior tool action.
+    async fn undo(&self, _metadata: &UndoMetadata) -> Result<(), ToolError> {
+        Err(ToolError::undo_failed(
+            self.name(),
+            "Tool has no undo implementation",
+        ))
+    }
 }
 
 /// Registry for tool instances and factories.
 #[derive(Default)]
 pub struct ToolRegistry {
     /// Registered tool instances.
-    instances: RwLock<HashMap<String, Box<dyn Tool>>>,
+    instances: RwLock<HashMap<String, Arc<dyn Tool>>>,
     /// Registered tool factories.
     factories: RwLock<HashMap<String, ToolFactory>>,
 }
@@ -67,7 +85,7 @@ impl ToolRegistry {
     /// Registers a tool instance.
     pub fn register(&self, tool: Box<dyn Tool>) {
         let action_type = tool.action_type().to_string();
-        self.instances.write().insert(action_type, tool);
+        self.instances.write().insert(action_type, Arc::from(tool));
     }
 
     /// Registers a factory for lazy tool construction.
@@ -78,26 +96,19 @@ impl ToolRegistry {
     /// Gets a tool by action type.
     ///
     /// If only a factory is registered, constructs and memoizes the tool.
-    pub fn get_tool(&self, action_type: &str) -> Option<&dyn Tool> {
-        // Check instances first
-        {
-            let instances = self.instances.read();
-            if instances.contains_key(action_type) {
-                // Can't return reference through RwLock, need different approach
-            }
+    pub fn get_tool(&self, action_type: &str) -> Option<Arc<dyn Tool>> {
+        if let Some(tool) = self.instances.read().get(action_type) {
+            return Some(tool.clone());
         }
 
-        // Check for factory
-        let factory = {
-            let factories = self.factories.read();
-            factories.get(action_type).map(|f| {
-                // We need to clone/call the factory
-                // This is a limitation - we'll construct on each call
-                // In a real implementation, we'd memoize properly
-            })
-        };
+        let factory = self.factories.read().get(action_type).cloned();
+        let factory = factory?;
 
-        None // Simplified - full implementation would handle this better
+        let tool = (factory)();
+        self.instances
+            .write()
+            .insert(action_type.to_string(), tool.clone());
+        Some(tool)
     }
 
     /// Checks if a tool can be executed.

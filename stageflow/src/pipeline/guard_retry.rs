@@ -1,9 +1,11 @@
 //! Guard retry strategy utilities for UnifiedStageGraph.
 
+use super::StageSpec;
 use crate::core::{StageKind, StageOutput};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// Policy describing how to retry when a guard stage fails.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,7 +169,7 @@ pub struct GuardRetryRuntimeState {
     /// Hash of the last output for stagnation detection.
     pub last_hash: Option<String>,
     /// Timestamp when retrying started.
-    pub started_at: Option<f64>,
+    pub started_at: Option<Instant>,
 }
 
 impl GuardRetryRuntimeState {
@@ -175,6 +177,16 @@ impl GuardRetryRuntimeState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+impl StageSpecLike for StageSpec {
+    fn kind(&self) -> Option<StageKind> {
+        Some(self.kind)
+    }
+
+    fn dependencies(&self) -> Vec<String> {
+        self.dependencies.iter().cloned().collect()
     }
 }
 

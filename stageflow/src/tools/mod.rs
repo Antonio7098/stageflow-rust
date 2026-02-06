@@ -18,7 +18,7 @@ pub use definitions::{ToolDefinition, ToolInput, ToolOutput};
 pub use errors::*;
 pub use executor::AdvancedToolExecutor;
 pub use registry::{
-    clear_tool_registry, get_tool_registry, register_tool, ResolvedToolCall, ToolRegistry,
+    clear_tool_registry, get_tool_registry, register_tool, ResolvedToolCall, Tool, ToolRegistry,
     UnresolvedToolCall,
 };
 pub use undo::{UndoMetadata, UndoStore};
